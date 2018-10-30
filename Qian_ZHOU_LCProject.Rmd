@@ -1,0 +1,265 @@
+---
+title: "Qian_Zhou_Lending_Club"
+output: pdf_document
+---
+
+### Step 1: Research Question: What model/which features best predict interest rate?
+
+## 1.1 Understanding Data & Pre-processing
+```{r}
+loan <- read.csv('loan.csv', stringsAsFactors = FALSE)
+loanT <- loan
+head(loan)
+```
+```{r}
+#check dimension
+print(dim(loan))
+
+#check data format
+str(loan)
+```
+```{r}
+# removing columns/features with over 80% NA values
+num.NA <- sort(sapply(loan, function(x){sum(is.na(x)|x=='' )}), decreasing = TRUE)
+remain.col <- names(num.NA) [which(num.NA <= 0.8*dim(loan) [1])]
+loan <- loan[, remain.col]
+remain.col
+
+# check remaining feature types
+loan.col.type <- sapply(loan, function(x) {typeof(x)})
+table(loan.col.type)
+```
+
+### Step 2: EDA: Which features influence interest rate? 
+```{r}
+#Understanding dependent variable
+loan$annual_inc[which(is.na(loan$annual_inc))] <- median(loan$annual_inc, na.rm = T)
+mean(loan$int_rate)
+sd(loan$int_rate)
+median(loan$int_rate)
+quantile(loan$int_rate, c(0.1, 0.25, 0.5, 0.75, 0.9))
+plot(density(loan$int_rate))
+```
+## 2.1 Exploring Numerical Features
+```{r}
+# Correlation between int_rate and other numerical features
+library(corrplot)
+num.feature <- names(loan[, sapply(loan, is.numeric)])
+correlation <- cor(loan$int_rate, loan[, c(num.feature)], use = "pairwise.complete.obs")
+correlation <- correlation[, order(correlation[1,], decreasing = TRUE)] 
+correlation <- correlation[2:33]
+#Correlation Plot
+corrplot(correlations, method = "square", t1.cex = 1, type = "lower")
+```
+
+```{r}
+#Correlation between int_rate & top five numerical features
+{barplot(correlation, main = 'Correlation between int_rate with other numerical features', ylab = 'Correlation', las=2,
+        cex.names=0.6, col=ifelse(correlation>0.15,"red","blue"))
+legend("topright", leg = c('top five correlated feature', 'other numerical feature'), fill = c("red", "blue"))}
+```
+## Based on correlation calculation, the top five predictive numerical features for int_rate are "total_rec_int", "revol_util", "inq_last_6mths", "total_pymnt_inv" and "total_pymnt". 
+
+## 2.2 Exploring Categorical Features
+```{r}
+#Initial Exploration: Boxplot
+library(lattice)
+bwplot(int_rate ~ loan_status, data = loan, xlab='loan_status', ylab='int_rat', main='loan_status vs int_rate')
+bwplot(int_rate ~ grade, data = loan, xlab='grade', ylab='int_rat', main='grade vs int_rate')
+bwplot(int_rate ~ sub_grade, data = loan, xlab='sub_grade', ylab='int_rat', main='sub_grade vs int_rate')
+bwplot(int_rate ~ home_ownership, data = loan, xlab='home_ownership', ylab='int_rat', main='home_ownership vs int_rate')
+bwplot(int_rate ~ term, data = loan, xlab='term', ylab='int_rat', main='term vs int_rate')
+bwplot(int_rate ~ pymnt_plan, data = loan, xlab='pymnt_plan', ylab='int_rat', main='pymnt_plan vs int_rate')
+bwplot(int_rate ~ application_type, data = loan, xlab='application_type', ylab='int_rat', main='application_type vs int_rate')
+bwplot(int_rate ~ emp_length, data = loan, xlab='emp_length', ylab='int_rat', main='emp_length vs int_rate')
+bwplot(int_rate ~ verification_status, data = loan, xlab='verification_status', ylab='int_rat', main='verification_status vs int_rate')
+```
+## Based on the above ouput, six categorical features seem to be influential: "grade", "sub-grade", "term", "verification_status", "pymnt_plan", "application_type". However, "grade" and "sub-grade" are assigned by LC, thus should not be available at the beginning. Let's test the remaining four variables.
+```{r}
+# Testing categorical features
+#verification_status
+t.test(subset(loan, verification_status == 'Verified')$int_rate, subset(loan, verification_status == 'Source Verified')$int_rate, conf.level = 0.95, mu = 0, alternative = "two.sided", paired = FALSE, var.equal = FALSE)
+t.test(subset(loan, verification_status == 'Not Verified')$int_rate, subset(loan, verification_status == 'Source Verified')$int_rate, conf.level = 0.95, mu = 0, alternative = "two.sided", paired = FALSE, var.equal = FALSE)
+t.test(subset(loan, verification_status == 'Not Verified')$int_rate, subset(loan, verification_status == 'Verified')$int_rate, conf.level = 0.95, mu = 0, alternative = "two.sided", paired = FALSE, var.equal = FALSE)
+#pymnt_plan
+t.test(subset(loan, pymnt_plan == 'n')$int_rate, subset(loan, pymnt_plan == 'y')$int_rate, conf.level = 0.95, mu = 0, alternative = "two.sided", paired = FALSE, var.equal = FALSE)
+#application_type
+t.test(subset(loan, application_type == 'INDIVIDUAL')$int_rate, subset(loan, application_type == 'JOINT')$int_rate, conf.level = 0.95, mu = 0, alternative = "two.sided", paired = FALSE, var.equal = FALSE)
+#term 
+t.test(subset(loan, term == ' 36 months')$int_rate, subset(loan, term == ' 60 months')$int_rate, conf.level = 0.95, mu = 0, alternative = "two.sided", paired = FALSE, var.equal = FALSE)
+```
+## Statistically significant differences were found among all these four variables: "term", "verification_status", "pymnt_plan", "application_type".
+
+
+### Step 3 Building Linear Regression Model
+## 3.1 Processing selected features/dealing with missing values
+```{r}
+loan$total_rec_int[which(is.na(loan$total_rec_int))] <- median(loan$total_rec_int, na.rm = T)
+loan$revol_util[which(is.na(loan$revol_util))] <- median(loan$revol_util, na.rm = T)
+loan$inq_last_6mths[which(is.na(loan$inq_last_6mths))] <- mean(loan$inq_last_6mthsl, na.rm = T)
+loan$total_pymnt[which(is.na(loan$total_pymnt))] <- median(loan$total_pymnt, na.rm = T)
+loan$total_pymnt_inv[which(is.na(loan$total_pymnt_inv))] <- median(loan$total_pymnt_inv, na.rm = T)
+```
+
+## 3.2 Split train and test data set
+```{r}
+set.seed(1)
+train.ind <- sample(1:dim(loan)[1], 0.8 * dim(loan)[1])
+train <- loan[train.ind, ]
+test <- loan[-train.ind, ]
+```
+
+## 3.3 Build model to predict loan$int_rate
+```{r}
+mod1 <- lm(int_rate ~ total_rec_int + revol_util + inq_last_6mths + total_pymnt + 
+             + total_pymnt_inv + term + verification_status + pymnt_plan + application_type, data = train)
+summary(mod1)
+```
+## Given that pymnt_plan is not a significant predictor, it is removed. 
+```{r}
+mod2 <- lm(int_rate ~ total_rec_int + revol_util + inq_last_6mths + total_pymnt + 
+             + total_pymnt_inv + term + verification_status + application_type, data = train)
+summary(mod2)
+```
+
+## 3.4 Model Performance (accuracy) on test data
+```{r}
+select.features <- c("int_rate", "total_rec_int", "revol_util", "inq_last_6mths", "total_pymnt","total_pymnt_inv","term","verification_status","application_type")
+test.sub <- test[, select.features]
+pre <- predict(mod2, newdata = test.sub)
+library(hydroGOF)
+mse(pre, test.sub$int_rate)
+```
+
+```{r}
+# plot the model
+plot(mod2)
+```
+
+## MSE is quite high. This model is not as desired. Let's rebuild the model by adding more features. 
+
+### Step 4 Rebuild the model 
+## 4.1 Go back to LC dictionary & more feature engineering
+# User Feature Selection
+```{r}
+#encode home_ownership
+loan$home_ownership <- ifelse(loan$home_ownership %in% c('ANY', 'NONE', 'OTHER'), 'OTHER',
+                              loan$home_ownership)
+#encode state information with the help of int_rate
+int_state <- by(loan, loan$addr_state, function(x) {
+  return(mean(x$int_rate))
+})
+
+loan$state_mean_int <-
+  ifelse(loan$addr_state %in% names(int_state)[which(int_state <=
+                                                       quantile(int_state, 0.25))], 'low',
+         ifelse(loan$addr_state %in% names(int_state)[which(int_state <=
+                                                              quantile(int_state, 0.5))],'lowmedium',
+                ifelse(loan$addr_state %in% names(int_state)[which(int_state <= quantile(int_state, 0.75))], 
+                       'mediumhigh', 'high')))
+select.features_1 <- c('home_ownership', 'state_mean_int')
+
+```
+# Financial feature selection
+```{r}
+loan$annual_inc[which(is.na(loan$annual_inc))] <- median(loan$annual_inc, na.rm = T)
+select.features_2 <- c('dti', 'annual_inc', 'verification_status')
+```
+# Credit score feature selection
+```{r}
+select.features_3 <- c('earliest_cr_line', 'last_credit_pull_d')
+```
+# Credit line feature selection
+```{r}
+loan$total_acc[which(is.na(loan$total_acc))] <- mean(loan$total_acc, na.rm = T) 
+loan$tot_cur_bal[which(is.na(loan$tot_cur_bal))] <- median(loan$tot_cur_bal, na.rm = T) 
+loan$open_acc[which(is.na(loan$open_acc))] <- mean(loan$open_acc, na.rm = T) 
+loan$acc_now_delinq[which(is.na(loan$acc_now_delinq))] <- median(loan$acc_now_delinq, na.rm = T)
+loan$delinq_2yrs[which(is.na(loan$delinq_2yrs))] <- median(loan$delinq_2yrs, na.rm = T)
+loan$mths_since_last_delinq[which(is.na(loan$mths_since_last_delinq))] <- median(loan$mths_since_last_delinq, na.rm = T)
+loan$collections_12_mths_ex_med[which(is.na(loan$collections_12_mths_ex_med))] <- median(loan$collections_12_mths_ex_med, na.rm = T)
+loan$tot_coll_amt[which(is.na(loan$tot_coll_amt))] <- median(loan$tot_coll_amt, na.rm = T)
+loan$pub_rec[which(is.na(loan$pub_rec))] <- median(loan$pub_rec, na.rm = T)
+loan$mths_since_last_major_derog[which(is.na(loan$mths_since_last_major_derog))] <- median(loan$mths_since_last_major_derog, na.rm = T)
+loan$revol_util[which(is.na(loan$revol_util))] <- mean(loan$revol_util, na.rm = T)
+loan$total_rev_hi_lim[which(is.na(loan$total_rev_hi_lim))] <- median(loan$total_rev_hi_lim, na.rm = T)
+
+select.features_4 <- c('total_acc', 'tot_cur_bal', 'open_acc', 'acc_now_delinq', 'delinq_2yrs',
+                       'mths_since_last_delinq', 'collections_12_mths_ex_med', 'tot_coll_amt',
+                       'pub_rec', 'mths_since_last_major_derog', 'revol_util',
+                       'total_rev_hi_lim')
+```
+# loan feature selection
+```{r}
+select.features_5 <- c('loan_amnt', 'application_type', 'purpose',
+                       'term', 'initial_list_status')
+```
+# loan payment feature selection
+```{r}
+select.features_6 <- c('installment', 'funded_amnt', 'funded_amnt_inv', 'pymnt_plan',
+                       'recoveries', 'collection_recovery_fee',
+                       'out_prncp', 'out_prncp_inv')
+```
+# Combining all the selected features
+```{r}
+select.features <- c(select.features_1, select.features_2, select.features_3, select.features_4,
+                     select.features_5, select.features_6, 'int_rate')
+loan <- loan[select.features]
+```
+# Engineering numerical & categorical variables
+```{r}
+# scale numerical features
+select.features.num <- names(loan[, sapply(loan[, 1:32], is.numeric)])
+loan.scale <- loan
+loan.scale[, select.features.num] <- scale(loan.scale[, select.features.num])
+# reduce levels of categorical features
+select.features.cate <- names(loan.scale[, sapply(loan.scale, is.character)])
+n_levels <- sort(sapply(loan.scale[select.features.cate], function(x) {nlevels(as.factor(x))}), decreasing = TRUE)
+print(n_levels)
+library("zoo")
+loan.scale$earliest_cr_line <- format(as.Date(as.yearmon(loan.scale$earliest_cr_line, "%B-%Y")), "%Y")
+length(unique(loan.scale$earliest_cr_line))
+loan.scale$last_credit_pull_d <- format(as.Date(as.yearmon(loan.scale$last_credit_pull_d, "%B-%Y")), "%Y")
+length(unique(loan.scale$last_credit_pull_d))
+```
+
+## 4.2 Building new model to predict loan$int_rate
+# Split training and test data
+```{r}
+set.seed(2)
+train.ind <- sample(1:dim(loan.scale)[1], 0.8 * dim(loan)[1])
+train <- loan.scale[train.ind, ]
+test <- loan.scale[-train.ind, ]
+```
+# Build Linear Regression model
+```{r}
+mod3 <- lm(int_rate ~ ., data = train)
+summary(mod3)
+```
+## Based on the output, some features are not significant, will then be removed.
+```{r}
+library(glmnet)
+drops <- c("last_credit_pull_d","earliest_cr_line","funded_amnt_inv","pymnt_plan", "int_rate")
+ind <- train[, !(names(train) %in% drops)]
+ind <- model.matrix( ~., ind)
+dep <- train[, 'int_rate']
+#Use cross validation to tune parameters
+mod4 <- cv.glmnet(ind, dep, family = 'gaussian', alpha = 1.0)
+summary(mod4)
+plot(mod4)
+```
+# Optimal parameters for this linear regression model
+```{r}
+mod4$lambda.1se
+coef(mod4, s="lambda.1se")
+```
+
+## 4.3 Model Performance on Test Data
+```{r}
+library(hydroGOF)
+ind <- test[, !(names(test) %in% drops)]
+ind <- model.matrix( ~., ind)
+cv.pred <- predict(mod4, s=mod4$lambda.1se, newx=ind)
+mse(cv.pred[,1], test$int_rate)
+```
+
