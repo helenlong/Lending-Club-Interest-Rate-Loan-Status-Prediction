@@ -1,0 +1,127 @@
+---
+title: "Predicting Loan Status"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+###Load Data, Preprocessing
+```{r}
+setwd("~/Documents/DS 501/Data")
+loan <- read.csv('loan.csv', stringsAsFactors = FALSE)
+loanT <- loan
+num.NA <- sort(sapply(loan, function(x){sum(is.na(x)|x=='' )}), decreasing = TRUE)
+remain.col <- names(num.NA) [which(num.NA <= 0.8*dim(loan) [1])]
+loan <- loan[, remain.col]
+```
+
+### Processing dependent variable
+```{r}
+sort(table(loan$loan_status))
+loan$loan_status <- gsub('Does not meet the credit policy. Status:',
+                         '', loan$loan_status)
+sort(table(loan$loan_status))
+loan <- subset(loan, !loan_status %in% c('Current', 'Issued'))
+loan$loan_status_binary <- with(loan, ifelse(loan_status == 'Fully Paid', 1, 0))
+```
+### Pre-processing user(general) feature
+```{r}
+# Remove irrelevant features: addr_state, emp_title, member_id, zipcode
+# Remaining features: emp_length, home_ownership
+loan$home_ownership <- ifelse(loan$home_ownership %in% c('ANY', 'NONE', 'OTHER'), 'OTHER',
+                              loan$home_ownership)
+int_state <- by(loan, loan$addr_state, function(x) {
+  return(mean(x$int_rate))
+})
+loan$state_mean_int <-
+  ifelse(loan$addr_state %in% names(int_state)[which(int_state <=
+                                                       quantile(int_state, 0.25))], 'low',
+         ifelse(loan$addr_state %in% names(int_state)[which(int_state <=
+                                                              quantile(int_state, 0.5))],'lowmedium',
+                ifelse(loan$addr_state %in% names(int_state)[which(int_state <= quantile(int_state, 0.75))], 
+                       'mediumhigh', 'high')))
+select.features_1 <- c("home_ownership", "state_mean_int")
+```
+### Pre-processing user financial feature
+```{r}
+loan$annual_inc[which(is.na(loan$annual_inc))] <- median(loan$annual_inc, na.rm = T)
+loan$log_annual_inc <- log(loan$annual_inc + 1)
+# Verification status may not be available, so not included in the model
+select.features_2 <- c("dti", "annual_inc")
+```
+###Pre-processing credit lines feature
+```{r}
+# many of the features were removed due to large number of missing values. Missing values of the following reserved features are dealt:
+loan$tot_cur_bal[which(is.na(loan$tot_cur_bal))] <- median(loan$tot_cur_bal, na.rm = T)
+loan$total_acc[which(is.na(loan$total_acc))] <- median(loan$total_acc, na.rm = T)
+loan$open_acc[which(is.na(loan$open_acc))] <- median(loan$open_acc, na.rm = T)
+loan$acc_now_delinq[which(is.na(loan$acc_now_delinq))] <- median(loan$acc_now_delinq, na.rm = T)
+loan$delinq_2yrs[which(is.na(loan$delinq_2yrs))] <- median(loan$delinq_2yrs, na.rm = T)
+loan$mths_since_last_delinq[which(is.na(loan$mths_since_last_delinq))] <- median(loan$mths_since_last_delinq, na.rm = T)
+loan$collections_12_mths_ex_med[which(is.na(loan$collections_12_mths_ex_med))] <- median(loan$collections_12_mths_ex_med, na.rm = T)
+loan$tot_coll_amt[which(is.na(loan$tot_coll_amt))] <- median(loan$tot_coll_amt, na.rm = T)
+loan$pub_rec[which(is.na(loan$pub_rec))] <- median(loan$pub_rec, na.rm = T)
+loan$mths_since_last_major_derog[which(is.na(loan$mths_since_last_major_derog))] <- median(loan$mths_since_last_major_derog, na.rm = T)
+loan$revol_util[which(is.na(loan$revol_util))] <- median(loan$revol_util, na.rm = T)
+loan$total_rev_hi_lim[which(is.na(loan$total_rev_hi_lim))] <- median(loan$total_rev_hi_lim, na.rm = T)
+select.features_3 <- c("tot_cur_bal","total_acc","open_acc","acc_now_delinq","delinq_2yrs","mths_since_last_delinq","collections_12_mths_ex_med","tot_coll_amt","pub_rec","mths_since_last_major_derog","revol_util","total_rev_hi_lim")
+```
+###Pre-processing loan feature & loan payment feature
+```{r}
+# Irrelevant and unavailable features were removed. Following features were reserved
+select.features_4 <- c("loan_amnt","term","installment","funded_amnt","pymnt_plan","recoveries","collection_recovery_fee","out_prncp","out_prncp_inv")
+```
+### Outcome variables (e.g., grade, subgrade, interest rate) are unavailable, thus not included in the model
+```{r}
+select.features <- c(select.features_1,select.features_2,select.features_3,select.features_4,"loan_status_binary")
+loan <- loan[select.features]
+```
+
+### Split train and test dataset
+```{r}
+train.ind <- sample(1:dim(loan)[1], 0.7 * dim(loan)[1])
+train.sub <- loan[train.ind, select.features]
+train.sub$state_mean_int <- relevel(as.factor(train.sub$state_mean_int), ref = 'low')
+test <- loan[-train.ind, select.features]
+```
+### Model Fit
+```{r}
+logis.mod <- glm(loan_status_binary ~ ., train.sub, family = 'binomial')
+summary(logis.mod)
+```
+### Model Evaluation
+```{r}
+library(pROC)
+pred <- predict(logis.mod, test)
+plot.roc(test$loan_status_binary, pred)
+```
+### Let's add regularization
+```{r}
+library(glmnet)
+test.matrix <- model.matrix(~., test[, 1:25])
+ind <- train.sub[, 1:25]
+ind <- model.matrix( ~., ind)
+dep <- train.sub[, "loan_status_binary"]
+logis.cvfit <- cv.glmnet(ind, dep, family = 'binomial')
+plot(logis.cvfit)
+```
+
+```{r}
+cv.pred <- predict(logis.cvfit, s = logis.cvfit$lambda.1se, newx = test.matrix)
+plot.roc(test$loan_status_binary, cv.pred)
+```
+### Coefficients of this model
+```{r}
+print(coef(logis.cvfit, s= "lambda.1se"))
+```
+```{r}
+summary(logis.cvfit)
+```
+
+
+
+
+
+
+
+
